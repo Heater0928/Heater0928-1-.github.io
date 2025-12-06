@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <title>女僕小暖爐的小天地</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans CJK TC", "Helvetica Neue", Arial; background:#0f1724; color:#e6eef8; margin:0; padding:0; display:flex; min-height:100vh; }
+    .wrap { margin:auto; width:96%; max-width:820px; background: linear-gradient(180deg,#0b1220, #08101a); border-radius:12px; box-shadow:0 10px 30px rgba(2,6,23,0.8); padding:18px; }
+    h1 { margin:0 0 12px 0; font-size:20px; }
+    .chat { height:60vh; overflow:auto; border:1px solid rgba(255,255,255,0.04); border-radius:8px; padding:12px; background:rgba(255,255,255,0.02); }
+    .msg { margin:8px 0; display:flex; gap:8px; align-items:flex-start; }
+    .msg.user { justify-content:flex-end; }
+    .bubble { padding:10px 12px; border-radius:10px; max-width:76%; line-height:1.4; }
+    .bubble.user { background:#1f2937; color:#fff; border:1px solid rgba(255,255,255,0.03); }
+    .bubble.maid { background:linear-gradient(90deg,#0ea5a9,#60a5fa); color:#021124; }
+    .controls { margin-top:12px; display:flex; gap:8px; }
+    textarea { width:100%; min-height:56px; resize:vertical; padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.05); background:rgba(255,255,255,0.02); color:inherit;}
+    button { cursor:pointer; border:0; padding:10px 12px; border-radius:8px; background:#111827; color:#e6eef8; }
+    .meta { margin-top:10px; display:flex; gap:8px; align-items:center; font-size:13px; color: #9fb2d3; }
+    .memory { margin-top:12px; font-size:13px; color:#9fb2d3; }
+    .small { font-size:12px; color:#94a3b8; }
+    .toolbar { display:flex; gap:8px; align-items:center; }
+    .pill { padding:6px 8px; border-radius:999px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.03); font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap" role="main">
+    <h1>女僕小暖爐</h1>
+    <div class="pill small">註:我真的不是男娘</div>
+
+    <div id="chat" class="chat" aria-live="polite"></div>
+
+    <div class="controls">
+      <textarea id="input" placeholder="和女僕說話……（例如：妳叫什麼？／我叫小明）"></textarea>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button id="sendBtn">發送</button>
+        <button id="resetBtn">清記憶</button>
+      </div>
+    </div>
+
+    <div class="meta">
+      <div class="toolbar">
+        <button id="exportBtn">匯出記憶</button>
+        <button id="importBtn">匯入記憶</button>
+        <input id="fileInput" type="file" accept="application/json" style="display:none" />
+      </div>
+      <div style="margin-left:auto" class="small">記憶儲存於你的瀏覽器（localStorage）</div>
+    </div>
+
+    <div class="memory" id="memoryView"></div>
+  </div>
+
+<script>
+/*
+  Maid Chat (純前端示範)
+  - 記憶存在 localStorage  (key: maid_chat_v1)
+  - 可儲存「簡單事實」(like name, fav food) 與 聊天紀錄
+  - 回答以超簡易規則+記憶檢索實作（示範核心概念）
+*/
+
+const STORAGE_KEY = 'maid_chat_v1';
+
+// 初始角色（你之後可以改）
+const defaultPersona = {
+  name: '小暖爐',
+  tone: '毒舌腹黑', // 僅供顯示與回答風格參考
+  greeting: '您忠心的女僕－－小暖爐－－在此獻上最崇敬的問候，主人，您今天又犯什麼傻了？'
+};
+
+let state = {
+  persona: defaultPersona,
+  memory: [], // {type:'fact',key:'name',value:'小明'} 或其他
+  history: [] // {role:'user'|'maid', text:'...'}
+};
+
+// load / save
+function loadState(){
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if(raw){
+    try{ state = JSON.parse(raw); }catch(e){ console.warn('load fail', e); localStorage.removeItem(STORAGE_KEY); }
+  } else {
+    saveState();
+  }
+}
+function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+// render
+const chatEl = document.getElementById('chat');
+const memoryView = document.getElementById('memoryView');
+
+function render(){
+  chatEl.innerHTML = '';
+  state.history.forEach(m => {
+    const row = document.createElement('div');
+    row.className = 'msg ' + (m.role === 'user' ? 'user' : 'maid');
+    const bub = document.createElement('div');
+    bub.className = 'bubble ' + (m.role === 'user' ? 'user': 'maid');
+    bub.innerText = m.text;
+    row.appendChild(bub);
+    chatEl.appendChild(row);
+  });
+  chatEl.scrollTop = chatEl.scrollHeight;
+  renderMemory();
+}
+
+function renderMemory(){
+  if(state.memory.length === 0){
+    memoryView.innerHTML = '<div class="small">目前記憶：空空如也（小暖爐會記得你說的重要資訊，例如名字、喜好）</div>';
+    return;
+  }
+  let html = '<b>已記住的小事：</b><ul>';
+  state.memory.forEach(m => {
+    html += `<li>${m.key}: ${m.value} <span class="small">(${m.type})</span></li>`;
+  });
+  html += '</ul>';
+  memoryView.innerHTML = html;
+}
+
+// 簡單的資訊抽取：偵測「我叫 X」「我喜歡 X」等
+function extractFacts(userText){
+  const text = userText.trim();
+  const facts = [];
+  // 我叫 X / 我是 X / 名字是 X
+  const nameMatch = text.match(/我叫\s*([^\s]{1,20})|我是\s*([^\s]{1,20})|我來自\s*([^\s]{1,20})|我擁有\s*([^\s]{1,20})|名字是\s*([^\s]{1,20})/i);
+  if(nameMatch){
+    const name = (nameMatch[1] || nameMatch[2] || nameMatch[3]).replace(/[。,.!?！]/g,'');
+    facts.push({type:'fact', key:'name', value:name});
+  }
+  // 我喜歡 X / 喜歡 X
+  const favMatch = text.match(/喜歡\s*(.+)$/i);
+  if(favMatch){
+    const val = favMatch[1].replace(/[。,.!?！]/g,'').trim();
+    if(val) facts.push({type:'fact', key:'preference', value: val});
+  }
+  // 年齡（簡單示例）
+  const ageMatch = text.match(/我[的]?年齡[是為]?(\d{1,3})/);
+  if(ageMatch){
+    facts.push({type:'fact', key:'age', value: ageMatch[1]});
+  }
+  return facts;
+}
+
+// 回答生成（非常簡易）：使用記憶檢索 + 關鍵字回應 + persona
+function generateResponse(userText){
+  const lower = userText.toLowerCase();
+
+  // 1) 先檢查是否有「詢問記憶」的語句
+  if(/你記得我嗎|還記得我嗎|記得我嗎/.test(userText)){
+    const nameFact = state.memory.find(f=>f.key==='name');
+    if(nameFact){
+      return `當然記得，${nameFact.value}——我還記得你之前說過的事唷。`;
+    } else {
+      return '我還沒記住你的名字呢，可以告訴我你叫什麼嗎？';
+    }
+  }
+
+  // 2) 詢問設定：女僕叫什麼？
+  if(/妳叫什麼|你叫什麼|妳叫什麼名字|你叫什麼名字|妳是誰|你是誰|妳的名字|你的名字/.test(userText)){
+    return `我叫 ${state.persona.name}，主人已經連我是誰都想不起來了嗎？唉，這日子...`;
+  }
+
+  // 3) 如果使用者告訴名字，我們會回應確認並存記憶
+  const facts = extractFacts(userText);
+  if(facts.length){
+    facts.forEach(f => {
+      // 更新/覆寫記憶
+      const idx = state.memory.findIndex(m => m.key === f.key);
+      if(idx >= 0) state.memory[idx].value = f.value;
+      else state.memory.push(f);
+    });
+    saveState();
+    const name = facts.find(f=>f.key==='name');
+    if(name) return `知道了，${name.value}。我會記住你的名字的～`;
+    return `好的，我把這件事記下來了。`;
+  }
+
+  // 4) 基本問候
+  if(/嗨|喂|哈囉|你好|妳好|hello|hi|oi|早安|午安|晚安/.test(lower)){
+    const nameFact = state.memory.find(f=>f.key==='name');
+    return `嗯？主人，終於想起我來了? `;
+  }
+
+  // 5) 查記憶示範：問喜好
+  if(/我喜歡什麼|我喜歡/.test(lower) && /記得/.test(lower) === false){
+    const pref = state.memory.find(f=>f.key==='preference');
+    if(pref) return `我知道，你之前有說過你喜歡 ${pref.value}。`;
+  }
+
+  if(/\b1\+1\b|1 \+ 1|1\+ 1/.test(userText) || /1\+1=/.test(userText)){
+  return '是 2，主人，需要我幫你報警找回你的智商嗎?';
+}
+  
+  // 6) 一些 fallback 的友善回覆（保持人設風格）
+  const fallback = [
+    '...抱歉，我的開發者沒教我遇到這句話怎麼回。',
+    '主人，這句話不在指令範圍內，你的問題超綱了。'
+  ];
+
+  // 簡單回傳其中一個 fallback
+  return fallback[Math.floor(Math.random() * fallback.length)];
+}
+
+// 送出流程
+function userSend(text){
+  if(!text || text.trim()==='') return;
+  state.history.push({role:'user', text});
+  saveState();
+  render();
+
+  // 模擬 Processing（立即回覆）
+  setTimeout(()=>{
+    // 先嘗試以記憶抽取為優先（如果使用者輸入是「我叫 X」會被抽成記憶）
+    const facts = extractFacts(text);
+    if(facts.length){
+      facts.forEach(f=>{
+        const idx = state.memory.findIndex(m => m.key === f.key);
+        if(idx >= 0) state.memory[idx].value = f.value;
+        else state.memory.push(f);
+      });
+      saveState();
+    }
+
+    const resp = generateResponse(text);
+    state.history.push({role:'maid', text: resp});
+    saveState();
+    render();
+  }, 350);
+}
+
+// UI bindings
+document.getElementById('sendBtn').addEventListener('click', ()=>{
+  const txt = document.getElementById('input').value;
+  document.getElementById('input').value = '';
+  userSend(txt);
+});
+document.getElementById('input').addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter' && !e.shiftKey){
+    e.preventDefault();
+    document.getElementById('sendBtn').click();
+  }
+});
+
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  if(confirm('確定要清除所有記憶與聊天紀錄嗎？（這動作不可逆）')) {
+    state = { persona: defaultPersona, memory:[], history:[] };
+    saveState();
+    render();
+  }
+});
+
+// 匯出 / 匯入
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'maid_memory.json'; a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById('importBtn').addEventListener('click', ()=>{
+  document.getElementById('fileInput').click();
+});
+document.getElementById('fileInput').addEventListener('change', (ev)=>{
+  const f = ev.target.files[0];
+  if(!f) return;
+  const r = new FileReader();
+  r.onload = (e)=>{
+    try{
+      const imported = JSON.parse(e.target.result);
+      if(imported && imported.history && imported.memory){
+        state = imported;
+        saveState();
+        render();
+        alert('匯入成功！');
+      } else alert('檔案格式好像不對。');
+    }catch(err){ alert('解析失敗：'+err.message); }
+  };
+  r.readAsText(f);
+});
+
+// 初始化
+loadState();
+if(state.history.length === 0){
+  state.history.push({role:'maid', text: state.persona.greeting});
+  saveState();
+}
+render();
+</script>
+</body>
+</html>
